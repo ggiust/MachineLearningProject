@@ -1,0 +1,148 @@
+---
+title: "A Model for Predicting Human Activity Recognition"
+output: html_document
+keep_md: true
+number_sections: false
+theme: default
+---
+#### by ggiust, in fulfillment of the Johns Hopkins University Data Science Specialization offered by Coursera: Practical Machine Learning, Course Project
+
+## Overview   
+
+One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this report, we'll use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. This report presents a model for predicting the manner in which the participants performed the exercise. For more information including the complete dataset, refer to http://groupware.les.inf.puc-rio.br/har.
+
+## Read Data  
+
+The following R-code sets a seed for the random number generator, reads in the training and problem data sets, and removes columns containing "NA", "#DIV/0!" or empty values.  
+
+```{r, results=FALSE, warning=FALSE, echo=FALSE}
+library(caret)
+```
+```{r , message=FALSE, warning=FALSE, cache=TRUE}
+set.seed(10) 
+df <- read.csv("pml-training.csv", na.strings = c("NA", "#DIV/0!", ""))
+problemset <- read.csv("pml-testing.csv", na.strings = c("NA", "#DIV/0!", ""))
+# remove columns containing NA
+df <- df[,colSums(is.na(df)) == 0]
+problemset <- problemset[,colSums(is.na(problemset)) == 0]
+```
+  
+## Pre-process Data  
+
+Let's first remove all of the columns unrelated to the physical measurement data.  
+
+```{r, cache=TRUE}
+df<-subset(df,select=-c(X,user_name,raw_timestamp_part_1,raw_timestamp_part_2,cvtd_timestamp,new_window,num_window))
+problemset<-subset(problemset,select=-c(X,user_name,raw_timestamp_part_1,raw_timestamp_part_2,cvtd_timestamp,new_window,num_window))
+```
+  
+Our data sets now have 52 columns of measurement data, which can be used as predictors.  
+
+Now we'll divide the training data into 2 sets to enable cross validation. The first set `trainset` contains 70% of the training data and is used to train prediction algorithms. The second set `testset` contains 30% of the training data and is used to test these algorithms.  
+
+```{r, cache=TRUE}
+inTrain<-createDataPartition(y=df$classe, p=0.7,list=FALSE)
+trainset<-df[inTrain,]
+testset<-df[-inTrain,]
+```
+  
+## Explore Different Algorithms  
+  
+Now we'll evaluate 6 different prediction algorithms and see which one performs the best.  
+
+```{r, cache=TRUE, results=FALSE, warning=FALSE, message=FALSE}
+# build random forest model
+mod1<-train(classe~.,data=trainset,method="rf") # 20 min
+pred1<-predict(mod1,newdata=testset)
+cm1<-confusionMatrix(pred1,testset$classe) 
+
+# build naive bayes model
+mod3<-train(classe~.,data=trainset,method="nb") # fast
+pred3<-predict(mod3,newdata=testset)
+cm3<-confusionMatrix(pred3,testset$classe)  
+
+# build linear discriminant analysis model
+mod4<-train(classe~.,data=trainset,method="lda") # fast
+pred4<-predict(mod4,newdata=testset)
+cm4<-confusionMatrix(pred4,testset$classe) 
+
+# build SVM linear model
+mod5<-train(classe~.,data=trainset,method="svmLinear") # fast
+pred5<-predict(mod5,newdata=testset)
+cm5<-confusionMatrix(pred5,testset$classe) 
+
+# build SVM radial model
+mod6<-train(classe~.,data=trainset,method="svmRadial") # 5 min
+pred6<-predict(mod6,newdata=testset)
+cm6<-confusionMatrix(pred6,testset$classe)  
+
+# build K nearest neighbor model
+mod7<-train(classe~.,data=trainset,method="knn") # fast
+pred7<-predict(mod7,newdata=testset)
+cm7<-confusionMatrix(pred7,testset$classe) 
+```
+   
+The accuracies for each of the above 6 algorithms are summarized as follows.  
+
+```{r, warning=FALSE, message=FALSE}
+acc<-data.frame(rf=format(cm1$overall[1],digits=3),
+                nb=format(cm3$overall[1],digits=3),
+                lda=format(cm4$overall[1],digits=3),
+                svmLinear=format(cm5$overall[1],digits=3),
+                svmRadial=format(cm6$overall[1],digits=3),
+                knn=format(cm7$overall[1],digits=3))
+row.names(acc)<-"Accuracy"
+acc
+```
+   
+## Build a Final Model  
+
+Based on these results, we select Random Forest for our model. However, we'll want to only use those predictors that meaningfully contribute to the model. We can estimate the contribution of each predictor to the model using caret's `varImp()` function as follows.  
+
+```{r, warning=FALSE, message=FALSE}
+imp<-varImp(mod1)  # get list of important variables
+impDF<-data.frame(imp[1])
+plot(imp,top=30)  # plot top 30
+```
+  
+The above plot shows the top 30 predictors contributing to the Random Forest model. We chose to retain predictors having >= 10% contribution to the model. Predictors having < 10% contribution are therefore removed from the data sets as follows.  
+
+```{r, warning=FALSE, message=FALSE, result=FALSE}
+threshold<-10 # retain variables with importance >= "threshold"
+for (ii in 1:nrow(impDF)) {
+    if (impDF$Overall[ii]<threshold) {
+        trainset[,rownames(impDF)[ii]]<-NULL # remove column
+        testset[,rownames(impDF)[ii]]<-NULL
+        problemset[,rownames(impDF)[ii]]<-NULL 
+    } 
+}
+```
+  
+We create our final (Random Forest) model containing `r length(trainset)-1` predictors as follows.  
+
+```{r, warning=FALSE, message=FALSE, cache=TRUE}
+fit<-train(classe~.,data=trainset,method="rf") 
+pred<-predict(fit,newdata=testset)
+cm<-confusionMatrix(pred,testset$classe)  
+cm
+```
+   
+## Analyze Errors  
+
+Let's compute the out-of-sample error.  
+
+```{r}
+oos<-as.numeric(1-cm$overall[1]) # oos error rate
+oos_pct<-format(oos*100,digits=2) # expressed as percentage
+```
+  
+The out-of-sample-error rate is `r oos` (or, `r oos_pct`%). This error is computed on the testing data set, not the training data set, as appropriate for cross-validation.  
+
+## Predict Testing Data  
+  
+Finally, we apply our model to the `problemset` to predict the original `pms-testing.csv` data.  
+
+```{r, warning=FALSE, message=FALSE}
+ans<-predict(fit,problemset)
+ans
+```
